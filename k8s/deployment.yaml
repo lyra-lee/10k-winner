@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: be-deployment
+  namespace: 10k
+  labels:
+    app: be
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: be
+  template:
+    metadata:
+      labels:
+        app: be
+    spec:
+      containers:
+      - name: be
+        image: idock.daumkakao.io/jarvis_hi/kanaya:be
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+          requests:
+            cpu: "200m"
+            memory: "256Mi"
+        env:
+        - name: OPEN_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: openai-api-key
+              key: openai-api-key
+
+        - name: OPENAI_API_BASE
+          value: "https://kanana-32d5b-vtynj.kap.9rum.cc/v1"

@@ -1,0 +1,18 @@
+#Ingress
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: be-ingress
+  namespace: 10k
+spec:
+  rules:
+  - host: be.ing.jarvis-dev.k8s.9rum.cc
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: be-service
+            port:
+              number: 80
