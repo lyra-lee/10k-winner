@@ -47,6 +47,7 @@ class AIFriendProfile:
         self.relationship_context = "친구"
         self.conversation_starters = []
         self.created_at = datetime.now().isoformat()
+        self.one_liner = ""  # 한 줄 소개 메시지
 
 
 class UserSession:
@@ -186,12 +187,22 @@ class AIFriendCreatorTool(BaseTool):
                 ], max_tokens=50, temperature=0.7
             )
             profile.name = name_response.choices[0].message.content.strip().replace('"', '')
-
             profile.personality = ", ".join(analysis_data.get('personality_traits', []))
             profile.conversation_style = analysis_data.get('communication_style', '일반적인 대화 스타일')
             profile.interests = analysis_data.get('interests', [])
             profile.relationship_context = analysis_data.get('relationship_type', '친구')
             profile.conversation_starters = analysis_data.get('conversation_starters', [])
+
+            # generate a one-liner intro message for this AI friend
+            one_liner_resp = client.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system",
+                     "content": "친구의 이름과 성격을 고려하여 이 친구가 상대에게 건내는 말, 즉 본인에 대한 소개를 한국어로 1문장이내로 짧게 작성해주세요. 인사말은 필요없습니다. 예시) 저만 믿으세요 햄!!!!"},
+                    {"role": "user", "content": f"이 AI 친구의 이름은 '{profile.name}'이고 성격은 {profile.personality}입니다."}
+                ], max_tokens=100, temperature=0.7
+            )
+            profile.one_liner = one_liner_resp.choices[0].message.content.strip()
 
             # 전역 프로필 및 사용자 세션에 저장
             ai_friend_profiles[profile.agent_id] = profile
@@ -217,7 +228,8 @@ Agent ID: {profile.agent_id}
                 'personality': profile.personality,
                 'conversation_style': profile.conversation_style,
                 'interests': profile.interests,
-                'conversation_starters': profile.conversation_starters
+                'conversation_starters': profile.conversation_starters,
+                'one_liner': profile.one_liner
             }
             return json.dumps(result, ensure_ascii=False)
         except Exception as e:
@@ -463,6 +475,7 @@ def create_friend_creator_agent(user_id: str, socketio_instance, sid: str):
         1. relationship_analyzer로 상대방 정보 분석
         2. conversation_history_analyzer로 이전 대화 기록 분석 (있다면)
         3. ai_friend_creator로 맞춤형 AI 친구 생성
+        **1번과 2번은 순서에 관계없이 진행되어도 됩니다.**
 
 
         **당신은 반드시 아래 설명된 생각/행동/관찰 사이클을 따라야 합니다.**
@@ -633,6 +646,9 @@ def ws_create_ai_friend(data):
             'agent_id': profile.agent_id,
             'name': profile.name,
             'personality': profile.personality,
+            'conversation_style': profile.conversation_style,
+            'interests': profile.interests,
+            'one_liner': profile.one_liner
         })
     except Exception:
         print("AI friend create JSON parse failed, output:", output)

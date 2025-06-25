@@ -37,6 +37,10 @@ def on_create_ai_friend_response(data):
     print(f"agent_id: {data['agent_id']}")
     print(f"name: {data['name']}")
     print(f"personality: {data['personality']}")
+    print(f"conversation_style: {data['conversation_style']}")
+    print(f"interests: {data['interests']}")
+    print(f"one_liner: {data['one_liner']}")
+
 
 
 @sio.on('chat_response')
@@ -52,7 +56,7 @@ if __name__ == '__main__':
     sio.emit('create_ai_friend', {
         'user_id': 'testuser',
         'target_person_info': '요즘 민주가 많이 지쳐 보여. 피식 웃을 수 있게 항상 마지막은 헴!!!!!!으로 끝내는 에너지 넘치는 친구면 좋겠어. 그리고 힐링할 수 있게 최대한 민주 취향에 맞는 상품을 찾아서 선물해줘.',
-        'budget': 10000
+        'conversation_history': '야근은 너무 많고 살도 찌고 진짜 힘들다 ㅠㅠㅠㅠ',
     })
     # wait until disconnect
     sio.wait()
