@@ -1,4 +1,5 @@
 flask
+flask-socketio
 openai
 langchain
 langchain-openai

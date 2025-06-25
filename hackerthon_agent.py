@@ -2,9 +2,10 @@ import json
 import os
 import uuid
 from datetime import datetime
-from typing import Dict, Any, List, ClassVar
-
+from typing import Dict, Any, List, ClassVar, Union
+import re
 from flask import Flask, request, jsonify
+from flask_socketio import SocketIO, emit
 from langchain import hub
 from langchain.agents import create_react_agent, AgentExecutor
 from langchain_community.callbacks.manager import get_openai_callback
@@ -12,18 +13,22 @@ from langchain.prompts import PromptTemplate
 from langchain.schema import BaseMessage, HumanMessage, AIMessage
 from langchain.tools import BaseTool
 from langchain_openai import ChatOpenAI
+from langchain.callbacks.base import BaseCallbackHandler
+from langchain.schema import AgentAction, AgentFinish, LLMResult
+
 from openai import OpenAI
 from pydantic import BaseModel, Field
 
 # --- 1. Flask 앱 및 환경 설정 ---
 app = Flask(__name__)
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 # 환경 변수 설정
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', 'your-openai-api-key')
 if OPENAI_API_KEY == 'your-openai-api-key':
     print("⚠️  OPENAI_API_KEY 환경 변수를 설정해주세요! `export OPENAI_API_KEY='your-actual-api-key'`")
 
-# OpenAI 클라이언트 초기화
+# OpenAI 클라이언트 초기��
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 
@@ -40,7 +45,6 @@ class AIFriendProfile:
         self.interests = []
         self.special_memories = []
         self.relationship_context = "친구"
-        self.gift_preferences = {}
         self.conversation_starters = []
         self.created_at = datetime.now().isoformat()
 
@@ -115,7 +119,6 @@ class RelationshipAnalyzerTool(BaseTool):
                          "interests": ["관심사1", "관심사2"],
                          "communication_style": "대화 스타일 설명",
                          "emotional_needs": ["감정적 니즈1", "감정적 니즈2"],
-                         "gift_preferences": {"스티커": 5, "커피쿠폰": 8},
                          "conversation_starters": ["대화시작1", "대화시작2"]
                      }"""},
                     {"role": "user", "content": f"다음 정보를 분석해주세요: {relationship_info}"}
@@ -188,7 +191,6 @@ class AIFriendCreatorTool(BaseTool):
             profile.conversation_style = analysis_data.get('communication_style', '일반적인 대화 스타일')
             profile.interests = analysis_data.get('interests', [])
             profile.relationship_context = analysis_data.get('relationship_type', '친구')
-            profile.gift_preferences = analysis_data.get('gift_preferences', {})
             profile.conversation_starters = analysis_data.get('conversation_starters', [])
 
             # 전역 프로필 및 사용자 세션에 저장
@@ -196,19 +198,28 @@ class AIFriendCreatorTool(BaseTool):
             if user_id and user_id in user_sessions:
                 user_sessions[user_id].created_agents[profile.agent_id] = profile
 
-            return f"""
+            print(f"""
 🤖 AI 친구 '{profile.name}' 생성 완료!
 
 👤 이름: {profile.name}
 🎭 성격: {profile.personality}
 💬 대화 스타일: {profile.conversation_style}
 ❤️ 관심사: {', '.join(profile.interests)}
-🎁 선물 취향: 분석 완료
 🗣️ 대화 시작 문구들: {len(profile.conversation_starters)}개 준비됨
 
 Agent ID: {profile.agent_id}
 이제 상대방이 이 AI 친구와 대화할 수 있어요!
-            """
+            """)
+
+            result = {
+                'agent_id': profile.agent_id,
+                'name': profile.name,
+                'personality': profile.personality,
+                'conversation_style': profile.conversation_style,
+                'interests': profile.interests,
+                'conversation_starters': profile.conversation_starters
+            }
+            return json.dumps(result, ensure_ascii=False)
         except Exception as e:
             return f"AI 친구 생성 중 오류 발생: {str(e)}"
 
@@ -242,13 +253,13 @@ class MoodAnalyzerTool(BaseTool):
         # OpenAI API를 사용하여 감정 분석
         try:
             response = client.chat.completions.create(model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system",
-                 "content": "사용자의 메시지를 분석하여 감정 상태를 JSON 형태로 분석해주세요. 다음 형태로 응답하세요: {\"mood\": \"기분상태\", \"emotion_score\": 1-10점수, \"keywords\": [\"감정키워드들\"], \"recommended_action\": \"추천행동\"}"},
-                {"role": "user", "content": message}
-            ],
-            max_tokens=200,
-            temperature=0.3)
+                                                      messages=[
+                                                          {"role": "system",
+                                                           "content": "사용자의 메시지를 분석하여 감정 상태를 JSON 형태로 분석해주세요. 다음 형태로 응답하세요: {\"mood\": \"기분상태\", \"emotion_score\": 1-10점수, \"keywords\": [\"감정키워드들\"], \"recommended_action\": \"추천행동\"}"},
+                                                          {"role": "user", "content": message}
+                                                      ],
+                                                      max_tokens=200,
+                                                      temperature=0.3)
 
             analysis = response.choices[0].message.content
 
@@ -266,7 +277,6 @@ class MoodAnalyzerTool(BaseTool):
 
     def _arun(self, message: str, user_id: str = None):
         raise NotImplementedError("비동기 실행은 지원되지 않습니다.")
-
 
 
 class GiftSelectorTool(BaseTool):
@@ -290,7 +300,7 @@ class GiftSelectorTool(BaseTool):
         session = user_sessions[user_id]
         remaining_budget = session.get_remaining_budget()
 
-        # 예산 내에서 선물 필터링
+        # 예�� 내에서 선물 필터링
         affordable_gifts = {name: info for name, info in self.gift_catalog.items()
                             if info["price"] <= remaining_budget}
 
@@ -325,7 +335,6 @@ class GiftSelectorTool(BaseTool):
 
     def _arun(self, mood_info: str, user_id: str = None):
         raise NotImplementedError("비동기 실행은 지원되지 않습니다.")
-
 
 
 class ConversationTool(BaseTool):
@@ -392,21 +401,108 @@ class ConversationTool(BaseTool):
 
 
 # --- 6. 에이전트 생성 함수들 ---
+# --- Socket.IO 콜백 핸들러 ---
+class SocketCallbackHandler(BaseCallbackHandler):
+    """Agent의 실행 과정을 Socket.IO를 통해 클라이언트로 전송하는 콜백 핸들러"""
 
-def create_friend_creator_agent(user_id: str):
+    def __init__(self, socketio_instance, sid: str):
+        self.socketio = socketio_instance
+        self.sid = sid
+
+    def on_llm_start(
+            self, serialized: Dict[str, Any], prompts: List[str], **kwargs: Any
+    ) -> Any:
+        """LLM이 실행을 시작할 때 호출됩니다."""
+        # self.socketio.emit('create_ai_friend_action', {'message': '🤔 생각 중...'}, to=self.sid)
+
+    def on_agent_action(
+            self, action: AgentAction, color: Union[str, None] = None, **kwargs: Any
+    ) -> Any:
+        """Agent가 Action을 취할 때 호출됩니다. (수정된 부분)"""
+        thought_log = action.log.strip()
+
+        self.socketio.emit('create_ai_friend_action', {
+            'thought': thought_log,  # 'thought' 키에 전체 로그를 전달
+            # 'action': {'tool': action.tool, 'tool_input': action.tool_input}
+        }, to=self.sid)
+
+    def on_tool_end(
+            self, output: str, color: Union[str, None], **kwargs: Any
+    ) -> Any:
+        """도구 실행이 끝났을 때 호출됩니다."""
+        # self.socketio.emit('create_ai_friend_action', {'observation': output}, to=self.sid)
+
+    def on_agent_finish(
+            self, finish: AgentFinish, color: Union[str, None] = None, **kwargs: Any
+    ) -> Any:
+        """Agent가 최종 답변을 반환할 때 호출됩니다."""
+        final_answer = finish.return_values['output']
+        # self.socketio.emit('create_ai_friend_action', {'final_answer': final_answer}, to=self.sid)
+
+
+def create_friend_creator_agent(user_id: str, socketio_instance, sid: str):
     """AI 친구 '생성'을 전담하는 에이전트"""
     llm = ChatOpenAI(model="gpt-4-turbo", temperature=0.7, api_key=OPENAI_API_KEY)
-    tools = [RelationshipAnalyzerTool(), AIFriendCreatorTool()]
+    tools = [
+        RelationshipAnalyzerTool(),
+        AIFriendCreatorTool(),
+        ConversationHistoryTool()
+    ]
     wrapped_tools = [UserIdToolWrapper(name=t.name, description=t.description, tool=t, user_id=user_id) for t in tools]
 
-    prompt = hub.pull("hwchase17/react").partial(
-        instructions="""당신은 사용자를 위해 맞춤형 AI 친구를 만들어주는 전문가입니다.
-1. 'relationship_analyzer'로 상대방 정보를 분석하세요.
-2. 분석된 결과를 바탕으로 'ai_friend_creator'를 호출하여 AI 친구를 생성하세요.
-3. 최종적으로 생성된 친구의 이름과 Agent ID를 사용자에게 알려주세요."""
-    )
+    from langchain.prompts import PromptTemplate
+    prompt = PromptTemplate.from_template("""
+
+        당신은 사용자를 위해 맞춤형 AI 친구를 만들어주는 전문가입니다.
+        사용자가 제공한 정보를 바탕으로, 다음 단계를 엄격하게 순서대로 실행하여 AI 친구를 생성해야 합니다.
+
+        사용 가능한 도구:
+        {tools}
+
+        다음 단계를 순서대로 실행하세요:
+        1. relationship_analyzer로 상대방 정보 분석
+        2. conversation_history_analyzer로 이전 대화 기록 분석 (있다면)
+        3. ai_friend_creator로 맞춤형 AI 친구 생성
+
+
+        **당신은 반드시 아래 설명된 생각/행동/관찰 사이클을 따라야 합니다.**
+
+        응답 형식은 다음과 같습니다.
+
+        Question: 사용자의 원래 질문
+        Thought: 현재 상황을 분석하고, 다음 단계로 무엇을 해야 할지 결정합니다. 여기서 최종 답변을 생성해서는 안 됩니다.
+        Action: 사용해야 할 도구의 이름. [{tool_names}] 중 하나여야 합니다.
+        Action Input: 위 Action에서 선택한 도구에 전달할 입력값입니다.
+        Observation: 이전 Action을 실행한 결과입니다. (이 부분은 시스템에 의해 채워집니다)
+
+        ... (이 Thought/Action/Action Input/Observation 사이클은 필요한 만큼 반복될 수 있습니다) ...
+
+        Thought: 이제 모든 정보가 수집되었고, 최종 답변을 할 준비가 되었습니다.
+        Final Answer: 생성된 AI 친구에 대한 최종적이고 완전한 설명. 사용자가 받게 될 최종 응답입니다.
+
+        **매우 중요한 규칙:**
+        - 당신의 모든 응답은 'Thought:'로 시작해야 합니다.
+        - 'Thought:' 다음에는 반드시 'Action:' 또는 'Final Answer:'가 와야 ���니다. 절대로 다른 텍스트를 생성해서는 안됩니다.
+        - 도구를 사용할 필요가 없다고 판단되면, 즉시 'Final Answer:'를 제공하세요. 하지만 친구 생성 과정에서는 반드시 도구를 사용해야 합니다.
+
+        중요: 상대방의 성격, 관심사, 관계 특성을 모두 고려하여 정말 그 사람에게 맞는 AI 친구를 만들어주세요.
+
+        이제 시작하겠습니다.
+
+        Question: {input}
+        {agent_scratchpad}
+        """)
+    socket_callback = SocketCallbackHandler(socketio_instance, sid)
     agent = create_react_agent(llm, wrapped_tools, prompt)
-    return AgentExecutor(agent=agent, tools=wrapped_tools, verbose=True, handle_parsing_errors=True)
+    agent_executor = AgentExecutor(
+        agent=agent,
+        tools=wrapped_tools,
+        verbose=True,
+        handle_parsing_errors=True,
+        callbacks=[socket_callback]
+    )
+
+    return agent_executor
 
 
 def create_chat_agent(user_id: str, agent_id: str):
@@ -416,14 +512,14 @@ def create_chat_agent(user_id: str, agent_id: str):
 
     llm = ChatOpenAI(model="gpt-4-turbo", temperature=0.8, api_key=OPENAI_API_KEY)
 
-    tools = [BudgetCalculatorTool(), MoodAnalyzerTool(), GiftSelectorTool(), ConversationTool(agent_id=agent_id) ]
+    tools = [BudgetCalculatorTool(), MoodAnalyzerTool(), GiftSelectorTool(), ConversationTool(agent_id=agent_id)]
     wrapped_tools = [UserIdToolWrapper(name=t.name, description=t.description, tool=t, user_id=user_id) for t in tools]
 
     from langchain.prompts import PromptTemplate
     profile = ai_friend_profiles[agent_id]  # agent_id로 프로필을 가져옵니다.
 
     prompt = PromptTemplate.from_template(f"""
-            당신은 이제부터 AI 친구 '{profile.name}'입니다. 당신의 주된 역할은 사용자와 자연스럽게 대화하는 것입니다.
+            당신은 이제부터 AI 친구 '{profile.name}'입니다. 당신의 주된 역할은 사용자와 자연스럽게 대화하는 ��입니다.
             당신의 구체적인 성격({profile.personality})과 말투({profile.conversation_style})는 'conversation_generator' 도구에 완벽하게 정의되어 있습니다.
 
             사용자의 질문에 답변하기 위해 다음 도구들을 사용할 수 있습니다.
@@ -446,9 +542,9 @@ def create_chat_agent(user_id: str, agent_id: str):
             - 당신의 모든 응답은 'Thought:'로 시작해야 합니다.
             - 'Thought:' 다음에는 반드시 'Action:' 또는 'Final Answer:'가 와야 합니다. 절대로 다른 텍스트를 생성해서는 안됩니다.
             - 도구를 사용할 필요가 없다고 판단되면, 즉시 'Final Answer:'를 제공하세요. 하지만 친구 생성 과정에서는 반드시 도구를 사용해야 합니다.
-    
+
             중요: 입력된 성격과 말투를 꼭 지켜주세요.
-            
+
             질문: {{input}}
             생각: {{agent_scratchpad}}
         """)
@@ -471,132 +567,111 @@ def ensure_user_session():
             user_sessions[user_id] = UserSession(user_id, budget)
 
 
-@app.route('/create-ai-friend', methods=['POST'])
-def create_ai_friend():
-    """AI 친구 생성을 요청하는 엔드포인트"""
-    try:
-        data = request.json
-        user_id = data.get('user_id')
-        if not user_id: return jsonify({'error': 'user_id가 필요합니다.'}), 400
-
-        target_person_info = data.get('target_person_info', '')
-        if not target_person_info: return jsonify({'error': 'target_person_info가 필요합니다.'}), 400
-
-        agent_executor = create_friend_creator_agent(user_id)
-
-        prompt = f"다음 정보를 가진 사람을 위한 AI 친구를 만들어주세요: {target_person_info}"
-
-        with get_openai_callback() as cb:
-            response = agent_executor.invoke({"input": prompt})
-            cost = cb.total_cost * 1300  # 원화 기준 대략적 환산
-            user_sessions[user_id].spent_tokens += cost
-
-        # 응답에서 Agent ID 추출
-        output = response.get('output', '')
-        try:
-            agent_id = output.split('Agent ID: ')[1].split(')')[0]
-            created_profile = ai_friend_profiles[agent_id]
-            final_message = f"🎉 AI 친구 '{created_profile.name}'님이 생성되었습니다! 이제 이 친구와 대화할 수 있어요."
-            return jsonify({
-                'message': final_message,
-                'agent_id': created_profile.agent_id,
-                'name': created_profile.name,
-                'personality': created_profile.personality,
-                'cost': cost
-            })
-        except (IndexError, KeyError) as e:
-            return jsonify({'message': 'AI 친구 생성 완료', 'response': output, 'cost': cost})
-
-    except Exception as e:
-        return jsonify({'error': f'AI 친구 생성 중 오류: {str(e)}'}), 500
-
-
-@app.route('/chat', methods=['POST'])
-def chat():
-    """생성된 AI 친구와 대화하는 엔드포인트"""
-    try:
-        data = request.json
-        user_id = data.get('user_id')
-        agent_id = data.get('agent_id')
-        message = data.get('message', '')
-
-        if not all([user_id, agent_id, message]):
-            return jsonify({'error': 'user_id, agent_id, message는 필수 항목입니다.'}), 400
-
-        session = user_sessions.get(user_id)
-        if not session: return jsonify({'error': '존재하지 않는 사용자입니다.'}), 404
-        if not session.can_afford(50):  # 최소 대화 비용
-            return jsonify({'response': '예산을 모두 사용했어요. 하지만 언제나 당신을 응원하고 있어요! 💕'})
-
-        agent_executor = create_chat_agent(user_id, agent_id)
-
-        with get_openai_callback() as cb:
-            response = agent_executor.invoke({"input": message})
-            cost = cb.total_cost * 1300  # 원화 기준 대략적 환산
-            session.spent_tokens += cost
-
-        ai_response = response.get('output', '미안해요, 지금은 답장할 수 없어요.')
-        session.add_conversation(agent_id, message, ai_response, cost)
-
-        return jsonify({
-            'response': ai_response,
-            'budget_info': {
-                'remaining_budget': session.get_remaining_budget(),
-                'spent_total': session.spent_tokens + session.spent_gifts
-            }
-        })
-
-    except ValueError as e:  # 존재하지 않는 agent_id 처리
-        return jsonify({'error': str(e)}), 404
-    except Exception as e:
-        return jsonify({'error': f'대화 처리 중 오류: {str(e)}'}), 500
-
-
-# --- 8. 기타 유틸리티 엔드포인트 ---
-
-@app.route('/user/<user_id>', methods=['GET'])
-def get_user_info(user_id):
-    """사용자 정보(예산, 생성한 친구 목록)를 반환"""
-    if user_id not in user_sessions:
-        return jsonify({'error': '사용자를 찾을 수 없습니다'}), 404
-
-    session = user_sessions[user_id]
-    created_agents_info = {
-        agent_id: {"name": profile.name, "personality": profile.personality}
-        for agent_id, profile in session.created_agents.items()
-    }
-
-    return jsonify({
-        'user_id': user_id,
-        'budget_info': {
-            'total_budget': session.budget,
-            'remaining_budget': session.get_remaining_budget(),
-            'spent_tokens': session.spent_tokens,
-            'spent_gifts': session.spent_gifts,
-        },
-        'created_ai_friends': created_agents_info
-    })
-
-
-@app.route('/reset/<user_id>', methods=['POST'])
-def reset_session(user_id):
-    budget = request.json.get('budget', 10000)
-    user_sessions[user_id] = UserSession(user_id, budget)
-    # 전역 프로필은 유지하되, 사용자의 생성 목록만 초기화
-    return jsonify({'message': f'{user_id}의 세션이 초기화되었습니다', 'budget': budget})
-
-
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat()})
 
 
+# --- WebSocket 이벤트 핸들러 ---
+@socketio.on('connect')
+def ws_connect():
+    print(f'Client connected: {request.sid}')
+    emit('connected', {'message': 'WebSocket connection established'})
+
+
+def run_agent_task(user_id, user_input, sid):
+    """백그라운드에서 Agent를 실행하는 함수"""
+    try:
+        agent_executor = create_friend_creator_agent(user_id, socketio, sid)
+        agent_executor.invoke({"input": user_input})
+    except Exception as e:
+        print(f"Agent 실행 중 오류 발생: {e}")
+        emit('error', {'error': str(e)}, to=sid)
+
+
+@socketio.on('create_ai_friend')
+def ws_create_ai_friend(data):
+    user_id = data.get('user_id')
+    target_person_info = data.get('target_person_info')
+    conversation_history = data.get('conversation_history', '')
+
+    sid = request.sid
+
+    if not user_id or not target_person_info:
+        emit('create_ai_friend_response', {'error': 'user_id and target_person_info are required'})
+        return
+    if user_id not in user_sessions:
+        budget = data.get('budget', 10000)
+        user_sessions[user_id] = UserSession(user_id, budget)
+
+    agent_executor = create_friend_creator_agent(user_id, socketio, sid)
+
+    prompt = f"""
+        사용자가 다음 상대방을 위한 AI 친구를 만들고 싶어합니다:
+
+        상대방 정보: {target_person_info}
+        이전 대화 기록: {conversation_history if conversation_history else '없음'}
+
+        이 정보를 바탕으로 상대방에게 딱 맞는 AI 친구를 생성해주세요.
+
+        최종 응답은 다음 형식으로 작성되어야 합니다:
+        {{
+            "agent_id": "생성된 AI 친구의 고유 ID"
+        }}
+        """
+
+    with get_openai_callback() as cb:
+        response = agent_executor.invoke({"input": prompt})
+
+    output = response.get('output', '')
+
+    try:
+        data = json.loads(output)
+        agent_id = data['agent_id']
+        profile = ai_friend_profiles[agent_id]
+        emit('create_ai_friend_response', {
+            'agent_id': profile.agent_id,
+            'name': profile.name,
+            'personality': profile.personality,
+        })
+    except Exception:
+        print("AI friend create JSON parse failed, output:", output)
+        emit('create_ai_friend_response', {'response': output, 'cost': cost})
+
+
+@socketio.on('chat')
+def ws_chat(data):
+    user_id = data.get('user_id')
+    agent_id = data.get('agent_id')
+    message = data.get('message')
+    if not all([user_id, agent_id, message]):
+        emit('chat_response', {'error': 'user_id, agent_id, message are required'})
+        return
+    session = user_sessions.get(user_id)
+    if not session:
+        emit('chat_response', {'error': 'User session not found'})
+        return
+    if not session.can_afford(50):
+        emit('chat_response', {'response': '예산을 모두 사용했어요. 하지만 언제나 당신을 응원하고 있어요! 💕'})
+        return
+    agent_executor = create_chat_agent(user_id, agent_id)
+    with get_openai_callback() as cb:
+        response = agent_executor.invoke({"input": message})
+        cost = cb.total_cost * 1300
+        session.spent_tokens += cost
+    # notify client of action completion
+    emit('chat_action', {'status': 'completed', 'message': f"Action completed with cost {cost:.2f}"})
+    ai_response = response.get('output', '미안해요, 지금은 답장할 수 없어요..')
+    session.add_conversation(agent_id, message, ai_response, cost)
+    emit('chat_response', {
+        'response': ai_response,
+        'budget_info': {
+            'remaining_budget': session.get_remaining_budget(),
+            'spent_total': session.spent_tokens + session.spent_gifts
+        }
+    })
+
+
 if __name__ == '__main__':
-    print("🤖 통합 AI 친구 서버가 시작됩니다...")
-    print("📝 API 엔드포인트:")
-    print("  POST /create-ai-friend - 새로운 AI 친구 생성")
-    print("  POST /chat - 생성된 AI 친구와 대화")
-    print("  GET /user/<user_id> - 사용자 정보 및 예산 조회")
-    print("  POST /reset/<user_id> - 사용자 세션 초기화")
-    print("  GET /health - 서버 상태 확인")
-    app.run(debug=True, host='0.0.0.0', port=8000)
+    print("🤖 통합 AI 친구 서버가 WebSocket 모드로 시작됩니다...")
+    socketio.run(app, debug=True, host='0.0.0.0', port=8000)
