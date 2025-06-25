@@ -254,7 +254,7 @@ class UserIdToolWrapper(BaseTool):
 # LangChain Agent 설정
 def create_agent(user_id: str):
     llm = ChatOpenAI(
-        model="gpt-4-turbo",
+        model=os.getenv("OPENAI_MODEL", "gpt-4-turbo"),
         temperature=0.7,
         api_key=OPENAI_API_KEY
     )

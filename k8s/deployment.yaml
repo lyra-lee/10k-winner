@@ -29,11 +29,12 @@ spec:
             cpu: "200m"
             memory: "256Mi"
         env:
-        - name: OPEN_API_KEY
+        - name: OPENAI_API_KEY
           valueFrom:
             secretKeyRef:
               name: openai-api-key
               key: openai-api-key
-
         - name: OPENAI_API_BASE
           value: "https://kanana-32d5b-vtynj.kap.9rum.cc/v1"
+        - name: OPENAI_MODEL
+          value: "kanana-1.5-32.5b-instruct"
