@@ -5,8 +5,8 @@ metadata:
   name: be-ingress
   namespace: 10k
   annotations:
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "180"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "180"
 spec:
   rules:
   - host: be.ing.jarvis-dev.k8s.9rum.cc
