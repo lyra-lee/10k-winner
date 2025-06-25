@@ -28,4 +28,4 @@ EXPOSE 8000
 ENV FLASK_ENV=production 
 
 # Start the Flask application
-CMD ["python", "gift_agent.py"]
+CMD ["python", "hackerthon_agent.py"]

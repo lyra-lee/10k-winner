@@ -112,7 +112,7 @@ class RelationshipAnalyzerTool(BaseTool):
     def _run(self, relationship_info: str, user_id: str = None) -> str:
         try:
             response = client.chat.completions.create(
-                model="gpt-4",
+                model=os.getenv("OPENAI_MODEL", "gpt-4"),
                 messages=[
                     {"role": "system", "content": """당신은 관계 분석 전문가입니다. 사용자가 제공한 상대방 정보를 분석하여 다음 JSON 형태로 응답하세요:
                      {
@@ -141,7 +141,7 @@ class ConversationHistoryTool(BaseTool):
                 return "대화 기록이 없어서 기본 설정으로 진행합니다."
 
             response = client.chat.completions.create(
-                model="gpt-4",
+                model=os.getenv("OPENAI_MODEL", "gpt-4"),
                 messages=[
                     {"role": "system",
                      "content": """대화 기록을 분석하여 상대방의 추가적인 특성을 파악해주세요. 다음 JSON 형태로 응답하세요:
@@ -180,7 +180,7 @@ class AIFriendCreatorTool(BaseTool):
             profile = AIFriendProfile()
 
             name_response = client.chat.completions.create(
-                model="gpt-4",
+                model=os.getenv("OPENAI_MODEL", "gpt-4",
                 messages=[
                     {"role": "system", "content": "상대방의 성격과 관계에 맞는 따뜻하고 친근한 한국어 AI 친구 이름을 2-3글자로 하나만 제안해주세요."},
                     {"role": "user",
@@ -265,7 +265,7 @@ class MoodAnalyzerTool(BaseTool):
     def _run(self, message: str, user_id: str = None) -> str:
         # OpenAI API를 사용하여 감정 분석
         try:
-            response = client.chat.completions.create(model="gpt-3.5-turbo",
+            response = client.chat.completions.create(model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo") ,
                                                       messages=[
                                                           {"role": "system",
                                                            "content": "사용자의 메시지를 분석하여 감정 상태를 JSON 형태로 분석해주세요. 다음 형태로 응답하세요: {\"mood\": \"기분상태\", \"emotion_score\": 1-10점수, \"keywords\": [\"감정키워드들\"], \"recommended_action\": \"추천행동\"}"},
@@ -393,7 +393,7 @@ class ConversationTool(BaseTool):
         try:
             # --- OpenAI API 직접 호출 ---
             response = client.chat.completions.create(
-                model="gpt-4-turbo",
+                model=os.getenv("OPENAI_MODEL", "gpt-4-turbo"),
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_message}
@@ -458,7 +458,7 @@ class SocketCallbackHandler(BaseCallbackHandler):
 
 def create_friend_creator_agent(user_id: str, socketio_instance, sid: str):
     """AI 친구 '생성'을 전담하는 에이전트"""
-    llm = ChatOpenAI(model="gpt-4-turbo", temperature=0.7, api_key=OPENAI_API_KEY)
+    llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4-turbo"), temperature=0.7, api_key=OPENAI_API_KEY)
     tools = [
         RelationshipAnalyzerTool(),
         AIFriendCreatorTool(),
@@ -527,7 +527,7 @@ def create_chat_agent(user_id: str, agent_id: str):
     if agent_id not in ai_friend_profiles:
         raise ValueError("존재하지 않는 AI 친구(Agent) ID입니다.")
 
-    llm = ChatOpenAI(model="gpt-4-turbo", temperature=0.8, api_key=OPENAI_API_KEY)
+    llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL", "gpt-4-turbo"), temperature=0.8, api_key=OPENAI_API_KEY)
 
     tools = [
         BudgetCalculatorTool(),
@@ -748,4 +748,6 @@ def ws_chat(data):
 
 if __name__ == '__main__':
     print("🤖 통합 AI 친구 서버가 WebSocket 모드로 시작됩니다...")
-    socketio.run(app, debug=True, host='0.0.0.0', port=8000)
+    # NOTE: In production, use a proper WSGI server (eventlet/gevent/gunicorn). For quick container run,
+    # we allow Werkzeug within Flask-SocketIO by setting allow_unsafe_werkzeug=True.
+    socketio.run(app, host='0.0.0.0', port=8000, allow_unsafe_werkzeug=True)
