@@ -180,7 +180,7 @@ class AIFriendCreatorTool(BaseTool):
             profile = AIFriendProfile()
 
             name_response = client.chat.completions.create(
-                model=os.getenv("OPENAI_MODEL", "gpt-4",
+                model=os.getenv("OPENAI_MODEL", "gpt-4"),
                 messages=[
                     {"role": "system", "content": "상대방의 성격과 관계에 맞는 따뜻하고 친근한 한국어 AI 친구 이름을 2-3글자로 하나만 제안해주세요."},
                     {"role": "user",
