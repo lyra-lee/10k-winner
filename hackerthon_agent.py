@@ -437,9 +437,9 @@ class SocketCallbackHandler(BaseCallbackHandler):
         """Agent가 Action을 취할 때 호출됩니다. (수정된 부분)"""
         thought_log = action.log.strip()
 
-        self.socketio.emit('create_ai_friend_action', {
-            'thought': thought_log,  # 'thought' 키에 전체 로그를 전달
-            # 'action': {'tool': action.tool, 'tool_input': action.tool_input}
+        self.socketio.emit('agent_action', {
+            # 'thought': thought_log,  # 'thought' 키에 전체 로그를 전달
+            'action': {'tool': action.tool, 'tool_input': action.tool_input}
         }, to=self.sid)
 
     def on_tool_end(
@@ -547,7 +547,6 @@ def create_chat_agent(user_id: str, agent_id: str):
 
     from langchain.prompts import PromptTemplate
     profile = ai_friend_profiles[agent_id]  # agent_id로 프로필을 가져옵니다.
-    print(f"profile: {profile}")
 
     template = """
             당신은 이제부터 AI 친구 '{name}'입니다. 당신의 주된 역할은 사용자와 자연스럽게 대화하는 AI입니다.
