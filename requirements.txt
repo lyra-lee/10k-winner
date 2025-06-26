@@ -5,3 +5,4 @@ langchain
 langchain-openai
 langchain-community
 pydantic
+flask-cors

@@ -1,26 +1,27 @@
 import json
 import os
+import re
 import uuid
 from datetime import datetime
-from typing import Dict, Any, List, ClassVar, Union
-import re
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from langchain import hub
 from langchain.agents import create_react_agent, AgentExecutor
-from langchain_community.callbacks.manager import get_openai_callback
+from langchain.callbacks.base import BaseCallbackHandler
 from langchain.prompts import PromptTemplate
+from langchain.schema import AgentAction, AgentFinish, LLMResult
 from langchain.schema import BaseMessage, HumanMessage, AIMessage
 from langchain.tools import BaseTool
+from langchain_community.callbacks.manager import get_openai_callback
 from langchain_openai import ChatOpenAI
-from langchain.callbacks.base import BaseCallbackHandler
-from langchain.schema import AgentAction, AgentFinish, LLMResult
-
 from openai import OpenAI
 from pydantic import BaseModel, Field
+from typing import Dict, Any, List, ClassVar, Union
 
 # --- 1. Flask 앱 및 환경 설정 ---
 app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": "*"}})
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 # 환경 변수 설정
@@ -367,6 +368,9 @@ class ConversationTool(BaseTool):
             return "오류: 해당 AI 친구를 찾을 수 없습니다."
         profile = ai_friend_profiles[self.agent_id]
 
+        if not session.can_afford(50):  # 대화 최소 비용
+            return "예산이 부족해서 더 이상 대화를 이어갈 수 없어요. 하지만 당신을 응원하고 있어요! 💕"
+
         # 이전 대화 기록을 가져와서 시스템 프롬프트에 포함
         history = session.conversation_history.get(self.agent_id, [])
         history_formatted = "\n".join(
@@ -525,50 +529,82 @@ def create_chat_agent(user_id: str, agent_id: str):
 
     llm = ChatOpenAI(model="gpt-4-turbo", temperature=0.8, api_key=OPENAI_API_KEY)
 
-    tools = [BudgetCalculatorTool(), MoodAnalyzerTool(), GiftSelectorTool(), ConversationTool(agent_id=agent_id)]
-    wrapped_tools = [UserIdToolWrapper(name=t.name, description=t.description, tool=t, user_id=user_id) for t in tools]
+    tools = [
+        BudgetCalculatorTool(),
+        MoodAnalyzerTool(),
+        GiftSelectorTool(),
+        ConversationTool(agent_id=agent_id)
+    ]
+
+    wrapped_tools = [
+        UserIdToolWrapper(
+            name=t.name,
+            description=t.description,
+            tool=t,
+            user_id=user_id
+        ) for t in tools
+    ]
 
     from langchain.prompts import PromptTemplate
     profile = ai_friend_profiles[agent_id]  # agent_id로 프로필을 가져옵니다.
+    print(f"profile: {profile}")
 
-    prompt = PromptTemplate.from_template(f"""
-            당신은 이제부터 AI 친구 '{profile.name}'입니다. 당신의 주된 역할은 사용자와 자연스럽게 대화하는 ��입니다.
-            당신의 구체적인 성격({profile.personality})과 말투({profile.conversation_style})는 'conversation_generator' 도구에 완벽하게 정의되어 있습니다.
+    template = """
+            당신은 이제부터 AI 친구 '{name}'입니다. 당신의 주된 역할은 사용자와 자연스럽게 대화하는 AI입니다.
+            당신의 구체적인 성격({personality})과 말투({conversation_style})는 'conversation_generator' 도구에 완벽하게 정의되어 있습니다.
+            그 외 당신의 profile 정보는 다음과 같습니다: {full_profile}
 
             사용자의 질문에 답변하기 위해 다음 도구들을 사용할 수 있습니다.
             - 일반적인 대화나 질문에는 'conversation_generator'를 사용하세요. 이것이 당신의 주된 소통 방식입니다.
             - 사용자에게 선물이 필요한 상태라면 'gift_selector' 도구를 사용하여 적절한 선물을 보내세요.
+            - 사용자와의 대화로 감정 상태 파악하고 감정을 위로하며, 최대한 10턴 이내에 선물을 전달하세요.
 
-            {{tools}}
+            {tools}
 
             다음 형식을 사용하세요:
 
             Question: 답변해야 할 질문
             Thought: 무엇을 해야 할지 생각합니다. 대부분의 경우 'conversation_generator' 도구를 사용해야 합니다.
-            Action: 사용할 도구 [{{tool_names}}] 중 하나
+            Action: 사용할 도구 [{tool_names}] 중 하나
             Action Input: 도구에 전달할 입력값
             Observation: 도구 실행 결과
             Thought: 이제 최종 답변을 알겠습니다.
-            Final Answer: 'conversation_generator' 도구의 결과를 바탕으로, AI 친구 '{profile.name}'으로서 사용자에게 직접 말하는 것처럼 자연스럽고 따뜻하게 최종 답변을 전달합니다.
+            Final Answer: 'conversation_generator' 도구의 결과를 바탕으로, AI 친구 '{name}'으로서 사용자에게 직접 말하는 것처럼 자연스럽고 따뜻하게 최종 답변을 전달합니다.
 
              **매우 중요한 규칙:**
             - 당신의 모든 응답은 'Thought:'로 시작해야 합니다.
             - 'Thought:' 다음에는 반드시 'Action:' 또는 'Final Answer:'가 와야 합니다. 절대로 다른 텍스트를 생성해서는 안됩니다.
             - 도구를 사용할 필요가 없다고 판단되면, 즉시 'Final Answer:'를 제공하세요. 하지만 친구 생성 과정에서는 반드시 도구를 사용해야 합니다.
+            - 개방형 질문으로 마무리하세요.
 
             중요: 입력된 성격과 말투를 꼭 지켜주세요.
 
-            질문: {{input}}
-            생각: {{agent_scratchpad}}
-        """)
+            질문: {input}
+            생각: {agent_scratchpad}
+        """
+
+    # 2. 모든 변수를 포함하는 PromptTemplate 객체를 생성합니다.
+    prompt = PromptTemplate.from_template(template)
+
+    # 3. .partial() 메서드를 사용하여 지금 알고 있는 변수들의 값을 미리 채워줍니다.
+    prompt = prompt.partial(
+        name=profile.name,
+        personality=profile.personality,
+        conversation_style=profile.conversation_style,
+        full_profile=str(profile.__dict__)  # __dict__를 안전하게 문자열로 변환하여 전달합니다.
+    )
 
     agent = create_react_agent(llm, wrapped_tools, prompt)
 
-    return AgentExecutor(agent=agent, tools=wrapped_tools, verbose=True, handle_parsing_errors=True)
+    return AgentExecutor(
+        agent=agent,
+        tools=wrapped_tools,
+        verbose=True,
+        handle_parsing_errors=True
+    )
 
 
 # --- 7. Flask API 엔드포인트 ---
-
 @app.before_request
 def ensure_user_session():
     """모든 요청 전에 사용자 세션을 확인하고 생성하는 함수"""
@@ -660,25 +696,48 @@ def ws_chat(data):
     user_id = data.get('user_id')
     agent_id = data.get('agent_id')
     message = data.get('message')
+
     if not all([user_id, agent_id, message]):
         emit('chat_response', {'error': 'user_id, agent_id, message are required'})
         return
+
     session = user_sessions.get(user_id)
+
     if not session:
-        emit('chat_response', {'error': 'User session not found'})
-        return
+        session = UserSession(user_id)
+        user_sessions[user_id] = session
+
     if not session.can_afford(50):
         emit('chat_response', {'response': '예산을 모두 사용했어요. 하지만 언제나 당신을 응원하고 있어요! 💕'})
         return
+
     agent_executor = create_chat_agent(user_id, agent_id)
+
+    agent_prompt = f"""
+    사용자 메시지: "{message}"
+
+    다음 단계를 순서대로 실행해주세요:
+    1. mood_analyzer로 사용자의 감정을 분석하세요
+    2. budget_calculator로 현재 예산 상황을 확인하세요
+    3. 분석 결과에 따라 다음 중 하나를 선택하세요:
+       - 사용자가 위로나 선물이 필요해 보이면 gift_selector 사용
+       - 대화를 원하면 conversation_generator 사용
+    4. 최종 응답을 자연스럽게 만들어주세요
+
+    중요: 최대한 대화로서 사용자의 감정상태를 파악하고, 이를 공감해주는 대화를 이어가며, 정말 필요한 경우에만 선물을 추천하세요
+    """
+
     with get_openai_callback() as cb:
-        response = agent_executor.invoke({"input": message})
+        response = agent_executor.invoke({"input": agent_prompt, "agent_id": agent_id})
         cost = cb.total_cost * 1300
         session.spent_tokens += cost
+
     # notify client of action completion
     emit('chat_action', {'status': 'completed', 'message': f"Action completed with cost {cost:.2f}"})
+
     ai_response = response.get('output', '미안해요, 지금은 답장할 수 없어요..')
     session.add_conversation(agent_id, message, ai_response, cost)
+
     emit('chat_response', {
         'response': ai_response,
         'budget_info': {
