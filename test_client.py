@@ -46,7 +46,7 @@ def on_create_ai_friend_response(data):
     sio.emit('chat', {
         'user_id': 'testuser',
         'agent_id':agent_id,
-        'message': '안녕',
+        'message': '힘들어',
     })
 
 

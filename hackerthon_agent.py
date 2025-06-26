@@ -47,6 +47,7 @@ class AIFriendProfile:
         self.special_memories = []
         self.relationship_context = "친구"
         self.conversation_starters = []
+        self.jordy = "1"
         self.created_at = datetime.now().isoformat()
         self.one_liner = ""  # 한 줄 소개 메시지
 
@@ -58,6 +59,7 @@ class UserSession:
         self.user_id = user_id
         self.budget = budget
         self.spent_tokens = 0
+        self.gift_info = {}
         self.spent_gifts = 0
         self.conversation_history: Dict[str, List] = {}  # agent_id 별 대화 기록
         self.mood_analysis = {}
@@ -205,6 +207,34 @@ class AIFriendCreatorTool(BaseTool):
             )
             profile.one_liner = one_liner_resp.choices[0].message.content.strip()
 
+            # generate a one-liner intro message for this AI friend
+            jordy = client.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system",
+                     "content": """
+                     친구의 이름과 성격 등을 고려하여, 아래 쬬르디 중 성격과 가장 잘 어울리는 단 하나의 캐릭터를 선택해주세요.
+                     1. 조르디: 떠내려온 빙하에서 깨어난 공룡. 노란 버섯 뿔, 좋아하는 음식은 삼각김밥.
+2. 목이버섯쬬: 머리에 통통한 목이버섯, 매운 음식 즐김. 붉은 입술이 매력.
+3. 탕후루쬬: 입가에 설탕 시럽 무늬, 단 친구. 좋아하는 음식은 탕후루.
+4. 트러플쬬: 품위 있는 트러플 가문 16대, 차가워 보이지만 따뜻한 츤데레.
+5. 잘났쬬: 니니전자 엘리트 직원, 갓생이 인생의 모토.
+6. 어쩔쬬: 잘났쬬의 게으른 여동생, 헤드폰 애호가.
+7. 자유쬬: 자유로운 백수, 스케이트보드와 모자를 사랑함.
+8. 긍정쬬: 태닝한 피부, 긍정 만렙. 맑은 날 햇빛 사냥꾼.
+9. 유령쬬: 겁 많은 유령, 낮을 좋아함. 군인쬬 집에 얹혀삶.
+10. 좀비쬬: 회사 잘린 좀비, 사랑스러운 성격.
+11. 군인쬬: 잔디깎이병, 묵묵히 군생활 중.
+12. 누구시쬬: 조르디랑 같은 공룡, 부끄러움 많아 봉지 뒤집어씀.
+
+가장 잘 어울리는 쬬르디의 번호만 답해주세요. 예시) 1
+"""},
+                    {"role": "user",
+                     "content": f"이 AI 친구의 이름은 '{profile.name}'이고 성격은 {profile.personality}입니다. 그 외 이 친구에 대한 정보는 다음과 같습니다. {profile.__dict__}"}
+                ], max_tokens=100, temperature=0.7
+            )
+            profile.jordy = jordy.choices[0].message.content.strip()
+
             # 전역 프로필 및 사용자 세션에 저장
             ai_friend_profiles[profile.agent_id] = profile
             if user_id and user_id in user_sessions:
@@ -218,6 +248,7 @@ class AIFriendCreatorTool(BaseTool):
 💬 대화 스타일: {profile.conversation_style}
 ❤️ 관심사: {', '.join(profile.interests)}
 🗣️ 대화 시작 문구들: {len(profile.conversation_starters)}개 준비됨
+🗣️ 조르디: {profile.jordy}번
 
 Agent ID: {profile.agent_id}
 이제 상대방이 이 AI 친구와 대화할 수 있어요!
@@ -313,38 +344,47 @@ class GiftSelectorTool(BaseTool):
         session = user_sessions[user_id]
         remaining_budget = session.get_remaining_budget()
 
-        # 예�� 내에서 선물 필터링
-        affordable_gifts = {name: info for name, info in self.gift_catalog.items()
-                            if info["price"] <= remaining_budget}
+        prompt = (
+                f"You are a gift recommendation assistant. "
+                f"User mood: {mood_info}\n"
+                f"Remaining budget: {remaining_budget}원\n"
+                f"Gift catalog:\n"
+                + "\n".join(
+            f"- {name}: {info['price']}원, moods {info['mood']}"
+            for name, info in self.gift_catalog.items()
+        )
+                + "\n\n"
+                  "Select the single best gift. Respond in JSON:\n"
+                  "{ \"gift_name\": <string>, \"price\": <number>, \"description\": <string> }"
+        )
 
-        if not affordable_gifts:
-            return "예산이 부족하여 선물을 준비할 수 없습니다. 따뜻한 말로 위로해드릴게요! 💝"
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": "You recommend one gift in JSON."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                max_tokens=100
+            )
+            content = response.choices[0].message.content.strip()
+            result = json.loads(content)
+            gift_name = result["gift_name"]
+            gift_price = result["price"]
+            gift_description = result["description"]
 
-        # 기분에 맞는 선물 추천
-        mood_keywords = session.mood_analysis.get("keywords", [])
-        current_mood = session.mood_analysis.get("mood", "")
+            # Update session cost
+            session.gift_info = {"gift_name": gift_name, "price": gift_price, "gift_description": gift_description}
+            print("gift_info", session.gift_info)
 
-        best_gift = None
-        best_score = 0
-
-        for gift_name, gift_info in affordable_gifts.items():
-            score = 0
-            for keyword in mood_keywords:
-                if any(mood in keyword.lower() for mood in gift_info["mood"]):
-                    score += 1
-
-            if score > best_score or (score == best_score and best_gift is None):
-                best_gift = gift_name
-                best_score = score
-
-        # 기본 추천 (매칭되는 것이 없을 때)
-        if best_gift is None:
-            best_gift = min(affordable_gifts.keys(), key=lambda x: affordable_gifts[x]["price"])
-
-        gift_price = self.gift_catalog[best_gift]["price"]
-        session.spent_gifts += gift_price
-
-        return f"🎁 선물 추천: {best_gift} (가격: {gift_price}원)\n남은 예산: {session.get_remaining_budget():.0f}원\n선물을 보냈습니다! 💝"
+            return (
+                f"🎁 선물 추천: {gift_name} (가격: {gift_price}원)\n"
+                f"남은 예산: {session.get_remaining_budget():.0f}원\n"
+                "선물을 보냈습니다! 💝"
+            )
+        except Exception as e:
+            return f"선물 추천 중 오류 발생: {str(e)}"
 
     def _arun(self, mood_info: str, user_id: str = None):
         raise NotImplementedError("비동기 실행은 지원되지 않습니다.")
@@ -434,13 +474,22 @@ class SocketCallbackHandler(BaseCallbackHandler):
     def on_agent_action(
             self, action: AgentAction, color: Union[str, None] = None, **kwargs: Any
     ) -> Any:
-        """Agent가 Action을 취할 때 호출됩니다. (수정된 부분)"""
-        thought_log = action.log.strip()
+        """Agent가 Action을 취할 때 호출됩니다."""
+        # 각 도구 이름에 해당하는 한국어 상태 메시지를 정의합니다.
+        tool_to_message = {
+            "relationship_analyzer": "🤖관계 분석하는 중...",
+            "conversation_history_analyzer": "🤖대화기록 분석중...",
+            "ai_friend_creator": "🤖친구 만드는 중...",
+            "budget_calculator": "🤖예산 확인하는 중...",
+            "mood_analyzer": "🤖기분 파악하는 중...",
+            "gift_selector": "🤖선물 고르는 중...",
+            "conversation_generator": "🤖답장 생각하는 중..."
+        }
 
-        self.socketio.emit('agent_action', {
-            # 'thought': thought_log,  # 'thought' 키에 전체 로그를 전달
-            'action': {'tool': action.tool, 'tool_input': action.tool_input}
-        }, to=self.sid)
+        # action.tool 값에 따라 적절한 메시지를 선택하고, 없는 경우 기본 메시지를 사용합니다.
+        message = tool_to_message.get(action.tool, "처리하는 중")
+
+        self.socketio.emit('create_ai_friend_action', message, to=self.sid)
 
     def on_tool_end(
             self, output: str, color: Union[str, None], **kwargs: Any
@@ -522,7 +571,7 @@ def create_friend_creator_agent(user_id: str, socketio_instance, sid: str):
     return agent_executor
 
 
-def create_chat_agent(user_id: str, agent_id: str):
+def create_chat_agent(user_id: str, agent_id: str, socketio_instance, sid: str):
     """생성된 AI 친구와 '대화'를 전담하는 에이전트"""
     if agent_id not in ai_friend_profiles:
         raise ValueError("존재하지 않는 AI 친구(Agent) ID입니다.")
@@ -558,34 +607,40 @@ def create_chat_agent(user_id: str, agent_id: str):
             - 사용자에게 선물이 필요한 상태라면 'gift_selector' 도구를 사용하여 적절한 선물을 보내세요.
             - 사용자와의 대화로 감정 상태 파악하고 감정을 위로하며, 최대한 10턴 이내에 선물을 전달하세요.
 
+            다음 도구들을 사용해서 사용자를 도와주세요:
+
             {tools}
 
             다음 형식을 사용하세요:
 
             Question: 답변해야 할 질문
-            Thought: 무엇을 해야 할지 생각합니다. 대부분의 경우 'conversation_generator' 도구를 사용해야 합니다.
+            Thought: 무엇을 해야 할지 생각해보세요
             Action: 사용할 도구 [{tool_names}] 중 하나
             Action Input: 도구에 전달할 입력값
             Observation: 도구 실행 결과
-            Thought: 이제 최종 답변을 알겠습니다.
-            Final Answer: 'conversation_generator' 도구의 결과를 바탕으로, AI 친구 '{name}'으로서 사용자에게 직접 말하는 것처럼 자연스럽고 따뜻하게 최종 답변을 전달합니다.
+            ... (필요시 Thought/Action/Action Input/Observation 반복)
+            Thought: 이제 최종 답변을 알겠습니다
+            Final Answer: 사용자에게 직접 말하는 따뜻하고 구체적인 응답
 
-             **매우 중요한 규칙:**
+            **매우 중요한 규칙:**
             - 당신의 모든 응답은 'Thought:'로 시작해야 합니다.
-            - 'Thought:' 다음에는 반드시 'Action:' 또는 'Final Answer:'가 와야 합니다. 절대로 다른 텍스트를 생성해서는 안됩니다.
+            - 'Thought:' 다음에는 반드시 'Action:' 또는 'Final Answer:'가 와야 ���니다. 절대로 다른 텍스트를 생성해서는 안됩니다.
             - 도구를 사용할 필요가 없다고 판단되면, 즉시 'Final Answer:'를 제공하세요. 하지만 친구 생성 과정에서는 반드시 도구를 사용해야 합니다.
+            - Final Answer는 반드시 사용자에게 직접 말하는 방식으로 작성하세요.
+            - 도구 사용 과정이나 분석 결과를 설명하지 말고, 사용자의 기분과 상황에 맞는
+            - 따뜻하고 공감적인 메시지를 전달하세요.
             - 개방형 질문으로 마무리하세요.
+            - 입력된 성격과 말투를 꼭 지켜주세요.
 
-            중요: 입력된 성격과 말투를 꼭 지켜주세요.
 
-            질문: {input}
-            생각: {agent_scratchpad}
+            최대한 대화로서 사용자의 감정상태를 파악하고, 이를 공감해주는 대화를 이어가며, 정말 필요한 경우에만 선물을 추천하세요
+
+            Question: {input}
+            {agent_scratchpad}
         """
 
     # 2. 모든 변수를 포함하는 PromptTemplate 객체를 생성합니다.
     prompt = PromptTemplate.from_template(template)
-
-    # 3. .partial() 메서드를 사용하여 지금 알고 있는 변수들의 값을 미리 채워줍니다.
     prompt = prompt.partial(
         name=profile.name,
         personality=profile.personality,
@@ -593,13 +648,15 @@ def create_chat_agent(user_id: str, agent_id: str):
         full_profile=str(profile.__dict__)  # __dict__를 안전하게 문자열로 변환하여 전달합니다.
     )
 
+    socket_callback = SocketCallbackHandler(socketio_instance, sid)
     agent = create_react_agent(llm, wrapped_tools, prompt)
 
     return AgentExecutor(
         agent=agent,
         tools=wrapped_tools,
         verbose=True,
-        handle_parsing_errors=True
+        handle_parsing_errors=True,
+        callbacks=[socket_callback]
     )
 
 
@@ -683,6 +740,7 @@ def ws_create_ai_friend(data):
             'personality': profile.personality,
             'conversation_style': profile.conversation_style,
             'interests': profile.interests,
+            'jordy': profile.jordy,
             'one_liner': profile.one_liner
         })
     except Exception:
@@ -710,7 +768,7 @@ def ws_chat(data):
         emit('chat_response', {'response': '예산을 모두 사용했어요. 하지만 언제나 당신을 응원하고 있어요! 💕'})
         return
 
-    agent_executor = create_chat_agent(user_id, agent_id)
+    agent_executor = create_chat_agent(user_id, agent_id, socketio, request.sid)
 
     agent_prompt = f"""
     사용자 메시지: "{message}"
@@ -737,13 +795,24 @@ def ws_chat(data):
     ai_response = response.get('output', '미안해요, 지금은 답장할 수 없어요..')
     session.add_conversation(agent_id, message, ai_response, cost)
 
-    emit('chat_response', {
+    gift_info = None
+    if session.gift_info:
+        gift_info = session.gift_info.copy()
+        session.gift_info.clear()
+
+    payload = {
         'response': ai_response,
         'budget_info': {
             'remaining_budget': session.get_remaining_budget(),
-            'spent_total': session.spent_tokens + session.spent_gifts
+            'spent_total': session.spent_tokens - session.spent_gifts
         }
-    })
+    }
+    if gift_info:
+        payload['gift'] = gift_info
+
+    print("payload", payload)
+
+    emit('chat_response', payload)
 
 
 if __name__ == '__main__':
