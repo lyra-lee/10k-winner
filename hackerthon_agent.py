@@ -489,7 +489,7 @@ class SocketCallbackHandler(BaseCallbackHandler):
         # action.tool 값에 따라 적절한 메시지를 선택하고, 없는 경우 기본 메시지를 사용합니다.
         message = tool_to_message.get(action.tool, "처리하는 중")
 
-        self.socketio.emit('create_ai_friend_action', message, to=self.sid)
+        self.socketio.emit('agent_action', message, to=self.sid)
 
     def on_tool_end(
             self, output: str, color: Union[str, None], **kwargs: Any
