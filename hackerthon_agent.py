@@ -478,7 +478,7 @@ class SocketCallbackHandler(BaseCallbackHandler):
         # 각 도구 이름에 해당하는 한국어 상태 메시지를 정의합니다.
         tool_to_message = {
             "relationship_analyzer": "🤖 관계 분석하는 중...",
-            "conversation_history_analyzer": "🤖 대화기록 분석중...",
+            "conversation_history_analyzer": "🤖 대화 기록 분석중...",
             "ai_friend_creator": "🤖 친구 만드는 중...",
             "budget_calculator": "🤖 예산 확인하는 중...",
             "mood_analyzer": "🤖 기분 파악하는 중...",
